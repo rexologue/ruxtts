@@ -30,3 +30,13 @@ exp:
 eval:
   texts_json_path: /path/to/eval_texts.json    # JSON: [{"text": "...", "speaker": "..."}, ...]
   ref_wav_path: /path/to/ref_audio.wav         # эталонный голос для оценки качества
+
+# === Neptune (опционально) ===
+# neptune:
+#   project: workspace/project-name            # обязательный параметр проекта в neptune.ai
+#   api_token: ${NEPTUNE_API_TOKEN}            # токен можно прокинуть через конфиг или окружение
+#   experiment_name: my-experiment             # имя эксперимента
+#   dependencies_path: /path/to/requirements.txt
+#   run_id: RUX-1                              # чтобы продолжить существующий запуск
+#   tags: [tts, experiment]                    # список тегов
+#   env_path: /path/to/.env                    # путь до .env для загрузки переменных

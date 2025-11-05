@@ -1,6 +1,7 @@
 import argparse
 
 import csv
+from dataclasses import asdict
 from typing import Optional
 
 import numpy as np
@@ -27,6 +28,7 @@ from train_utils import (
     save_checkpoint
 )
 from validation_utils import SpeechEval
+from loggers import NeptuneLogger, filter_metrics
 
 def forward(
     model,  # GPT
@@ -83,6 +85,16 @@ def main():
 
     cfg = load_cfg(args.config)
     xtts_cfg = load_xtts_cfg(cfg.model.config)
+
+    neptune_logger: NeptuneLogger | None = None
+    if cfg.neptune is not None:
+        neptune_logger = NeptuneLogger(cfg.neptune)
+        neptune_logger.log_hyperparameters(
+            {
+                "train": asdict(cfg.train),
+                "data": asdict(cfg.data),
+            }
+        )
 
     # reproducibility
     seed_all(cfg.train.seed)
@@ -206,109 +218,145 @@ def main():
 
     acc_i = 0
 
-    while step < total_steps:
-        for batch in dataloader:
-            # forward + loss (без AMP)
-            loss_text, loss_mel, _ = forward(
-                model,
-                dvae,
-                torch_mel_spectrogram_dvae,
-                torch_mel_spectrogram_style_encoder,
-                batch,
-                device
-            )
+    try:
+        while step < total_steps:
+            for batch in dataloader:
+                # forward + loss (без AMP)
+                loss_text, loss_mel, _ = forward(
+                    model,
+                    dvae,
+                    torch_mel_spectrogram_dvae,
+                    torch_mel_spectrogram_style_encoder,
+                    batch,
+                    device
+                )
 
-            loss_text_ce = loss_text * xtts_cfg.model_args.gpt_loss_text_ce_weight
-            loss_mel_ce = loss_mel * xtts_cfg.model_args.gpt_loss_mel_ce_weight
-            loss = (loss_text_ce + loss_mel_ce) / grad_accum
+                loss_text_ce = loss_text * xtts_cfg.model_args.gpt_loss_text_ce_weight
+                loss_mel_ce = loss_mel * xtts_cfg.model_args.gpt_loss_mel_ce_weight
+                loss = (loss_text_ce + loss_mel_ce) / grad_accum
 
-            # backward (с аккумулированием)
-            loss.backward()
-            acc_i += 1
+                # backward (с аккумулированием)
+                loss.backward()
+                acc_i += 1
 
-            # шаг оптимизации каждые grad_accum итераций
-            if acc_i == grad_accum:
-                # grad clipping
-                if cfg.train.grad_clip_norm and cfg.train.grad_clip_norm > 0:
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.train.grad_clip_norm)
+                # шаг оптимизации каждые grad_accum итераций
+                if acc_i == grad_accum:
+                    # grad clipping
+                    if cfg.train.grad_clip_norm and cfg.train.grad_clip_norm > 0:
+                        torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.train.grad_clip_norm)
 
-                optimizer.step()
-                optimizer.zero_grad(set_to_none=True)
-                scheduler.step()
+                    optimizer.step()
+                    optimizer.zero_grad(set_to_none=True)
+                    scheduler.step()
 
-                metrics_dir = {
-                    "step": step,
-                    "lt": float(loss_text.detach().cpu()),
-                    "lm": float(loss_mel.detach().cpu()),
-                    "lr": float(scheduler.get_last_lr()[0]),
-                }
+                    metrics_dir = {
+                        "step": step,
+                        "lt": float(loss_text.detach().cpu()),
+                        "lm": float(loss_mel.detach().cpu()),
+                        "lr": float(scheduler.get_last_lr()[0]),
+                    }
 
-                step += 1
-                acc_i = 0
+                    step += 1
+                    acc_i = 0
 
-                pbar.update(1)
-                pbar.set_postfix(metrics_dir)
+                    pbar.update(1)
+                    pbar.set_postfix(metrics_dir)
 
-                metrics_dir["mos"] = None
-                metrics_dir["cer"] = None
-                metrics_dir["cossim"] = None
+                    metrics_dir["mos"] = None
+                    metrics_dir["cer"] = None
+                    metrics_dir["cossim"] = None
 
-                metrics_writer.writerow(metrics_dir)
-                metrics_file.flush()
-
-                # валидация/чекпоинт по расписанию
-                if (eval_every > 0) and (step % eval_every == 0):
-                    model.eval()
-                    
-                    # делаем чекпоинт
-                    save_checkpoint(xtts, optimizer, scheduler, step, cfg)
-
-                    # делаем сэмплы
-                    samples_path = cfg.exp.eval_samples_path / f"samples_{step}"
-                    samples_path.mkdir(parents=True, exist_ok=True)
-
-                    # список для подсчета метрик
-                    files = []
-                    texts = []
-
-                    with torch.no_grad():
-                        for i, val_text in enumerate(cfg.eval.texts):
-                            gen_name = samples_path / f"{i}.wav"
-
-                            if val_text["language"] == "ru":
-                                files.append(gen_name)
-                                texts.append(val_text["text"])
-
-                            res = xtts.inference(
-                                text=val_text["text"],
-                                language=val_text["language"],
-                                gpt_cond_latent=cond_gpt_latent,
-                                speaker_embedding=cond_speaker_embedding,
-                            )
-
-                            wav = np.asarray(res["wav"], dtype=np.float32)
-                            sf.write(gen_name, wav, xtts_cfg.model_args.output_sample_rate)
-
-                    metrics_eval = evaluator(texts, files)
-
-                    metrics_eval["lt"] = None
-                    metrics_eval["lm"] = None
-                    metrics_eval["lr"] = None
-                    metrics_eval["step"] = step
-
-                    metrics_writer.writerow(metrics_eval)
+                    metrics_writer.writerow(metrics_dir)
                     metrics_file.flush()
 
-                    model.train()
+                    if neptune_logger is not None:
+                        tracked_metrics = filter_metrics(
+                            {
+                                "lt": metrics_dir["lt"],
+                                "lm": metrics_dir["lm"],
+                                "lr": metrics_dir["lr"],
+                            }
+                        )
+                        if tracked_metrics:
+                            neptune_logger.save_metrics(
+                                "train",
+                                list(tracked_metrics.keys()),
+                                list(tracked_metrics.values()),
+                                step=step,
+                            )
 
-                if step >= total_steps:
-                    break
+                    # валидация/чекпоинт по расписанию
+                    if (eval_every > 0) and (step % eval_every == 0):
+                        model.eval()
+                        
+                        # делаем чекпоинт
+                        save_checkpoint(xtts, optimizer, scheduler, step, cfg)
 
-    # Сохраняем финальный чекпоинт (-1 - знак конца)
-    save_checkpoint(xtts, optimizer, scheduler, -1, cfg)
+                        # делаем сэмплы
+                        samples_path = cfg.exp.eval_samples_path / f"samples_{step}"
+                        samples_path.mkdir(parents=True, exist_ok=True)
 
-    pbar.close()
-    metrics_file.close()
+                        # список для подсчета метрик
+                        files = []
+                        texts = []
+
+                        with torch.no_grad():
+                            for i, val_text in enumerate(cfg.eval.texts):
+                                gen_name = samples_path / f"{i}.wav"
+
+                                if val_text["language"] == "ru":
+                                    files.append(gen_name)
+                                    texts.append(val_text["text"])
+
+                                res = xtts.inference(
+                                    text=val_text["text"],
+                                    language=val_text["language"],
+                                    gpt_cond_latent=cond_gpt_latent,
+                                    speaker_embedding=cond_speaker_embedding,
+                                )
+
+                                wav = np.asarray(res["wav"], dtype=np.float32)
+                                sf.write(gen_name, wav, xtts_cfg.model_args.output_sample_rate)
+
+                        metrics_eval = evaluator(texts, files)
+
+                        metrics_eval["lt"] = None
+                        metrics_eval["lm"] = None
+                        metrics_eval["lr"] = None
+                        metrics_eval["step"] = step
+
+                        metrics_writer.writerow(metrics_eval)
+                        metrics_file.flush()
+
+                        if neptune_logger is not None:
+                            eval_metrics = filter_metrics(
+                                {
+                                    "mos": metrics_eval.get("mos"),
+                                    "cer": metrics_eval.get("cer"),
+                                    "cossim": metrics_eval.get("cossim"),
+                                }
+                            )
+                            if eval_metrics:
+                                neptune_logger.save_metrics(
+                                    "eval",
+                                    list(eval_metrics.keys()),
+                                    list(eval_metrics.values()),
+                                    step=step,
+                                )
+
+                        model.train()
+
+                    if step >= total_steps:
+                        break
+    finally:
+        # Сохраняем финальный чекпоинт (-1 - знак конца)
+        save_checkpoint(xtts, optimizer, scheduler, -1, cfg)
+
+        pbar.close()
+        metrics_file.close()
+
+        if neptune_logger is not None:
+            neptune_logger.stop()
 
 
 if __name__ == "__main__":
