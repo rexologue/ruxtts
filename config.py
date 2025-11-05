@@ -68,12 +68,24 @@ class EvalCfg:
 
 
 @dataclass
+class NeptuneCfg:
+    project: str
+    api_token: str | None = None
+    experiment_name: str | None = None
+    dependencies_path: Path | None = None
+    run_id: str | None = None
+    tags: list[str] | None = None
+    env_path: Path | None = None
+
+
+@dataclass
 class Cfg:
     model: ModelCfg
     data: DataCfg
     train: TrainCfg
     exp: ExpCfg
     eval: EvalCfg
+    neptune: NeptuneCfg | None = None
 
 
 def load_cfg(path: str | Path) -> Cfg:
@@ -143,8 +155,21 @@ def load_cfg(path: str | Path) -> Cfg:
     # Check reference audio file existence
     if not eval.ref_wav_path.exists():
         raise ValueError(f"Cannot find refernce audio file {str(eval.ref_wav_path)}")
-    
-    return Cfg(model=model, data=data, train=train, exp=exp, eval=eval)
+
+    neptune_cfg = None
+    if y.get("neptune"):
+        neptune_raw = y["neptune"]
+        neptune_cfg = NeptuneCfg(
+            project=neptune_raw["project"],
+            api_token=neptune_raw.get("api_token"),
+            experiment_name=neptune_raw.get("experiment_name"),
+            dependencies_path=Path(neptune_raw["dependencies_path"]) if neptune_raw.get("dependencies_path") else None,
+            run_id=neptune_raw.get("run_id"),
+            tags=neptune_raw.get("tags"),
+            env_path=Path(neptune_raw["env_path"]) if neptune_raw.get("env_path") else None,
+        )
+
+    return Cfg(model=model, data=data, train=train, exp=exp, eval=eval, neptune=neptune_cfg)
 
 
 def load_xtts_cfg(config_path: Path) -> XttsConfig:
