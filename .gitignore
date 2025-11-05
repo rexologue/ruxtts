@@ -414,6 +414,7 @@ fabric.properties
 # Packing-only formats
 *.iso
 *.tar
+!nisqa/nisqa_mos_only.tar
 
 # Package management formats
 *.dmg
@@ -1427,7 +1428,3 @@ erl_crash.dump
 
 CMakeUserPresets.json
 .neptune
-
-*.yaml
-!config.example.yaml
-!docker-compose.example.yaml

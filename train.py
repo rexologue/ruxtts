@@ -260,6 +260,9 @@ def main():
                     samples_path = cfg.exp.eval_samples_path / f"samples_{step}"
                     samples_path.mkdir(parents=True, exist_ok=True)
 
+                    # список для подсчета метрик
+                    wavs = []
+
                     with torch.no_grad():
                         for i, val_text in enumerate(cfg.eval.texts):
                             res = xtts.inference(
@@ -268,8 +271,13 @@ def main():
                                 gpt_cond_latent=cond_gpt_latent,
                                 speaker_embedding=cond_speaker_embedding,
                             )
-                            wav = np.asarray(res["wav"], dtype=np.float32)
+
+                            wavs.append(res["wav"])
+
+                            wav = np.asarray(res["wav"].cpu().detach(), dtype=np.float32)
                             sf.write(samples_path / f"{i}.wav", wav, xtts_cfg.model_args.output_sample_rate)
+
+                    
 
                     model.train()
 
