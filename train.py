@@ -26,7 +26,7 @@ from train_utils import (
     seed_all,
     save_checkpoint
 )
-
+from validation_utils import SpeechEval
 
 def forward(
     model,  # GPT
@@ -188,6 +188,9 @@ def main():
         drop_last=True,
     )
 
+    # ---- eval stuff ----
+    evaluator = SpeechEval(cfg.eval.ref_wav_path, device)
+
     # ---- train loop ----
     model.train()
     optimizer.zero_grad(set_to_none=True)
@@ -198,7 +201,7 @@ def main():
 
     pbar = tqdm(total=total_steps, initial=step, desc="train", dynamic_ncols=True)
     metrics_file = open(str(cfg.exp.metrics_path), "w", encoding="utf-8")
-    metrics_writer = csv.DictWriter(metrics_file, fieldnames=["step", "lt", "lm", "lr"], delimiter="|")
+    metrics_writer = csv.DictWriter(metrics_file, fieldnames=["step", "lt", "lm", "lr", "mos", "cossim", "cer"], delimiter="|")
     metrics_writer.writeheader()
 
     acc_i = 0
@@ -246,6 +249,10 @@ def main():
                 pbar.update(1)
                 pbar.set_postfix(metrics_dir)
 
+                metrics_dir["mos"] = None
+                metrics_dir["cer"] = None
+                metrics_dir["cossim"] = None
+
                 metrics_writer.writerow(metrics_dir)
                 metrics_file.flush()
 
@@ -261,10 +268,17 @@ def main():
                     samples_path.mkdir(parents=True, exist_ok=True)
 
                     # список для подсчета метрик
-                    wavs = []
+                    files = []
+                    texts = []
 
                     with torch.no_grad():
                         for i, val_text in enumerate(cfg.eval.texts):
+                            gen_name = samples_path / f"{i}.wav"
+
+                            if val_text["language"] == "ru":
+                                files.append(gen_name)
+                                texts.append(val_text["text"])
+
                             res = xtts.inference(
                                 text=val_text["text"],
                                 language=val_text["language"],
@@ -272,12 +286,18 @@ def main():
                                 speaker_embedding=cond_speaker_embedding,
                             )
 
-                            wavs.append(res["wav"])
+                            wav = np.asarray(res["wav"], dtype=np.float32)
+                            sf.write(gen_name, wav, xtts_cfg.model_args.output_sample_rate)
 
-                            wav = np.asarray(res["wav"].cpu().detach(), dtype=np.float32)
-                            sf.write(samples_path / f"{i}.wav", wav, xtts_cfg.model_args.output_sample_rate)
+                    metrics_eval = evaluator(texts, files)
 
-                    
+                    metrics_eval["lt"] = None
+                    metrics_eval["lm"] = None
+                    metrics_eval["lr"] = None
+                    metrics_eval["step"] = step
+
+                    metrics_writer.writerow(metrics_eval)
+                    metrics_file.flush()
 
                     model.train()
 
