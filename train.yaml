@@ -1,0 +1,32 @@
+# === Модель и артефакты ===
+model_dir: /home/user5/.models/xtts                      # содержит config.json, vocab.json, mel_stats.pth, dvae.pth, model.pth
+
+# === Данные ===
+data:
+  metadata_csv: /home/user5/audio_stuff/metadata1.csv    # sep="|" ; обязательно есть audio_path|speaker_name
+  text_column: text_accent                               # имя текстовой колонки в metadata.csv     
+
+# === Тренировка ===
+train:
+  device: cuda
+  batch_size: 16
+  num_workers: 4
+  grad_accum_steps: 1
+  total_steps: 100000
+  eval_steps: 10                                       # каждые N шагов — чекпоинт + валидация
+  lr: 5.0e-6
+  betas: [0.9, 0.96]
+  weight_decay: 0.0
+  eps: 1.0e-8
+  grad_clip_norm: 1.0
+  seed: 42
+
+# === Сессия ===
+exp:
+  exp_dir: /home/user5/audio_stuff/exp
+  resume: False
+
+# === Валидация ===
+eval:
+  texts_json_path: /home/user5/audio_stuff/eval.json
+  ref_wav_path: /home/user5/audio_stuff/ref/ref.wav
