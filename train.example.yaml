@@ -5,6 +5,9 @@ model_dir: /path/to/model_dir                  # содержит config.json, v
 data:
   metadata_csv: /path/to/metadata.csv          # sep="|", обязательно содержит audio_path|speaker_name
   text_column: text_accent                     # имя текстовой колонки в metadata.csv
+  use_sampler: false                           # true — включить сэмплер по длинам текста
+  sampler_char_border: 150                     # порог длины текста в символах
+  sampler_upsamle_prob: 0.7                    # вероятность отбора строк короче порога
 
 # === Тренировка ===
 train:

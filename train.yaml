@@ -4,7 +4,10 @@ model_dir: /home/user5/.models/xtts                      # содержит conf
 # === Данные ===
 data:
   metadata_csv: /home/user5/audio_stuff/metadata1.csv    # sep="|" ; обязательно есть audio_path|speaker_name
-  text_column: text_accent                               # имя текстовой колонки в metadata.csv     
+  text_column: text_accent                               # имя текстовой колонки в metadata.csv
+  use_sampler: false                                     # true — включить сэмплер по длинам текста
+  sampler_char_border: 150                               # порог длины текста в символах
+  sampler_upsamle_prob: 0.7                              # вероятность отбора строк короче порога
 
 # === Тренировка ===
 train:

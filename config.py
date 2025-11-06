@@ -22,6 +22,9 @@ class ModelCfg:
 class DataCfg:
     metadata_csv: Path
     text_column: str = "text"
+    use_sampler: bool = False
+    sampler_char_border: int = 0
+    sampler_upsamle_prob: float = 0.5
 
 
 @dataclass

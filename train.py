@@ -9,7 +9,7 @@ from tqdm import tqdm
 import soundfile as sf
 
 import torch
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, WeightedRandomSampler
 
 from core.xtts import Xtts
 from core.generic_utils import load_fsspec
@@ -189,10 +189,41 @@ def main():
         xtts.tokenizer,
         xtts_cfg,
     )
+    sampler = None
+    shuffle = True
+    if cfg.data.use_sampler:
+        prob = float(cfg.data.sampler_upsamle_prob)
+        if not (0.0 <= prob <= 1.0):
+            raise ValueError("sampler_upsamle_prob must be between 0 and 1")
+
+        border = int(cfg.data.sampler_char_border)
+        text_lengths = ds.df[ds.text_column].astype(str).str.len().to_numpy()
+        short_mask = torch.from_numpy(text_lengths < border)
+
+        n_short = int(short_mask.sum().item())
+        n_long = len(ds) - n_short
+
+        weights = torch.zeros(len(ds), dtype=torch.double)
+
+        if n_short > 0:
+            short_prob = prob if n_long > 0 else 1.0
+            weights[short_mask] = short_prob / n_short
+
+        if n_long > 0:
+            long_prob = (1.0 - prob) if n_short > 0 else 1.0
+            weights[~short_mask] = long_prob / n_long
+
+        if torch.sum(weights) == 0:
+            raise ValueError("Sampler weights sum to zero; check sampler settings and dataset")
+
+        sampler = WeightedRandomSampler(weights=weights, num_samples=len(ds), replacement=True)
+        shuffle = False
+
     dataloader = DataLoader(
         ds,
         batch_size=cfg.train.batch_size,
-        shuffle=True,
+        shuffle=shuffle,
+        sampler=sampler,
         collate_fn=collate_fn,
         num_workers=cfg.train.num_workers,
         pin_memory=(device.type == "cuda"),
