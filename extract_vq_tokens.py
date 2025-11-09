@@ -62,6 +62,12 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Torch device to use (defaults to CUDA if available)",
     )
+    parser.add_argument(
+        "--resume-chunks",
+        type=int,
+        default=0,
+        help="Number of already generated chunks to skip before resuming",
+    )
     return parser.parse_args()
 
 
@@ -164,12 +170,27 @@ def main() -> None:
         LOGGER.warning("No audio files found in metadata: %s", args.metadata)
         return
 
+    if args.resume_chunks < 0:
+        raise ValueError("resume-chunks must be a non-negative integer")
+
     chunk_size = math.ceil(total_audios / args.num_splits)
     LOGGER.info("Total audios: %d | Chunk size: %d", total_audios, chunk_size)
 
     skipped: list[str] = []
     current_chunk: list[dict[str, object]] = []
-    chunk_idx = 0
+    resume_chunks = min(args.resume_chunks, args.num_splits)
+    chunk_idx = resume_chunks
+    skip_count = min(total_audios, resume_chunks * chunk_size)
+    if skip_count:
+        LOGGER.info(
+            "Resuming from chunk %d; skipping %d audio entries from metadata.",
+            resume_chunks,
+            skip_count,
+        )
+        audio_paths = audio_paths[skip_count:]
+    if not audio_paths:
+        LOGGER.info("No new audio entries to process after applying resume offset.")
+        return
     processed = 0
 
     def flush_chunk() -> None:
@@ -188,7 +209,7 @@ def main() -> None:
 
     metadata_root = args.metadata.parent
 
-    total_batches = math.ceil(total_audios / args.batch_size)
+    total_batches = math.ceil(len(audio_paths) / args.batch_size)
     for batch_paths in tqdm(
         _batched(audio_paths, args.batch_size),
         total=total_batches,
@@ -250,7 +271,9 @@ def main() -> None:
     if chunk_idx < args.num_splits:
         LOGGER.info("Requested %d splits but only wrote %d due to limited data.", args.num_splits, chunk_idx)
 
-    LOGGER.info("Generated tokens for %d audio files; skipped %d.", processed, len(skipped))
+    LOGGER.info("Generated tokens for %d new audio files; skipped %d.", processed, len(skipped))
+    if skip_count:
+        LOGGER.info("Resume option skipped %d previously processed audio files.", skip_count)
 
     if skipped:
         LOGGER.info("Skipped %d files due to errors or missing data.", len(skipped))
