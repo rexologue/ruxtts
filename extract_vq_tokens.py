@@ -209,6 +209,12 @@ def main() -> None:
 
     metadata_root = args.metadata.parent
 
+    hop_length = getattr(mel_transform, "hop_length", None)
+    if not hop_length:
+        raise ValueError("TorchMelSpectrogram is expected to define a positive hop_length")
+    downsample_factor = 2 ** getattr(dvae, "num_layers", 0)
+    downsample_factor = max(1, downsample_factor)
+
     total_batches = math.ceil(len(audio_paths) / args.batch_size)
     for batch_paths in tqdm(
         _batched(audio_paths, args.batch_size),
@@ -217,6 +223,7 @@ def main() -> None:
     ):
         wavs: list[torch.Tensor] = []
         valid_paths: list[str] = []
+        wav_lengths: list[int] = []
         for path_str in batch_paths:
             path = Path(path_str)
             if not path.is_absolute():
@@ -237,11 +244,12 @@ def main() -> None:
                 continue
             wavs.append(wav)
             valid_paths.append(path_str)
+            wav_lengths.append(int(wav.shape[-1]))
 
         if not wavs:
             continue
 
-        max_len = max(wav.shape[-1] for wav in wavs)
+        max_len = max(wav_lengths)
         padded_wavs = [F.pad(wav, (0, max_len - wav.shape[-1])) if wav.shape[-1] < max_len else wav for wav in wavs]
 
         with torch.no_grad():
@@ -251,11 +259,14 @@ def main() -> None:
             codes = dvae.get_codebook_indices(mel)
 
         codes_np = codes.detach().cpu().numpy()
-        for path_str, token_arr in zip(valid_paths, codes_np):
+        for path_str, token_arr, wav_len in zip(valid_paths, codes_np, wav_lengths):
+            mel_len = wav_len // hop_length + 1
+            code_len = math.ceil(mel_len / downsample_factor)
+            trimmed_tokens = np.asarray(token_arr[:code_len], dtype=np.int64)
             current_chunk.append(
                 {
                     "audio_path": path_str,
-                    "tokens": np.asarray(token_arr, dtype=np.int64),
+                    "tokens": trimmed_tokens,
                 }
             )
             processed += 1
